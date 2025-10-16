@@ -1,0 +1,69 @@
+pipeline {
+    agent any
+ 
+    tools {
+        maven 'maven' // Ensure this is configured in Jenkins Global Tool Configuration
+    }
+ 
+    environment {    // configure tomcast user name password with their ip and port number
+        TOMCAT_USER = 'deployer'
+        TOMCAT_PASS = 'deployer'
+        TOMCAT_HOST = '54.80.166.55'
+        TOMCAT_PORT = '8080'
+    }
+ 
+    stages {
+        stage('Clone Repository') {
+            steps {
+                git branch: 'main', url: 'https://github.com/sanjayguruji/devops-sept-25.git' // share you github repo url along with branch
+            }
+        }
+ 
+        stage('Build with Maven') { // build with maven
+            steps {
+                sh 'mvn clean package -Dmaven.test.failure.ignore=true'
+            }
+        }
+ 
+        stage('Deploy to Tomcat') { // deploy tomcat on server
+            steps {
+                sh '''
+                    curl -u $TOMCAT_USER:$TOMCAT_PASS \
+                    --upload-file webapp/target/webapp.war \
+                    "http://$TOMCAT_HOST:$TOMCAT_PORT/manager/text/deploy?path=/sampleapp&update=true"
+                '''
+            }
+        }
+ 
+        stage('Deploy to Docker Host') { // deploy docker file and .war file on docker host from Jenkins server
+            steps {
+                sshPublisher(publishers: [
+                    sshPublisherDesc(
+                        configName: 'docker', // Must match SSH config name in Jenkins
+                        transfers: [
+                            sshTransfer(
+                                sourceFiles: '**/*',
+                                removePrefix: '',
+                                remoteDirectory: 'devops', // create directory on docker host
+                                execCommand: '''
+                                    cd devops // copy ecr commands from aws ecr repo
+                                    aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/o1h6f0q2
+                                    docker build -t devops-sanjaya .
+                                    docker tag devops-sanjaya:latest public.ecr.aws/o1h6f0q2/devops-sanjaya:latest
+                                    docker push public.ecr.aws/o1h6f0q2/devops-sanjaya:latest
+                                '''
+                            )
+                        ]
+                    )
+                ])
+            }
+        }
+    }
+ 
+    post {
+        success {
+            junit '**/target/surefire-reports/TEST-*.xml'
+            archiveArtifacts artifacts: '**/target/*.war', fingerprint: true
+        }
+    }
+}
